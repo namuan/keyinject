@@ -2,6 +2,21 @@
 
 `keyinject` reads generic-password secrets from the macOS Keychain, places them in a target command's environment, then replaces itself with that command. The target receives ordinary environment variables and does not need to know about Keychain.
 
+## How it works
+
+```mermaid
+flowchart LR
+    K[macOS Keychain] -->|SecItemCopyMatching| I[keyinject]
+    C[Invoke with env names and command] --> I
+    I -->|Resolve requested secrets| R{All secrets found?}
+    R -->|No, unless --allow-missing| E[Exit with error]
+    R -->|Yes, or missing allowed| M[Merge into environment<br/>injected values override existing ones]
+    M --> X[syscall.Exec replaces keyinject]
+    X --> T[Target command runs with environment]
+```
+
+Secrets are provisioned in Keychain separately; `keyinject` only reads them when invoked. `exec` replaces the injector process rather than leaving a wrapper running.
+
 ## Requirements
 
 - macOS
