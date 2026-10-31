@@ -1,0 +1,5 @@
+/bin/
+/keyinject
+*.test
+coverage.out
+.DS_Store
