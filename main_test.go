@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,24 +53,24 @@ func TestRunMissingSecretFails(t *testing.T) {
 
 func TestRunMergesEnvironmentAndExecFailure(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	oldPath := os.Getenv("PATH")
+	t.Setenv("KEYINJECT_TEST_VALUE", "old")
 	status := run([]string{"--env", "KEYINJECT_TEST_VALUE", "--", "sh", "-c", "exit 42"}, func(string, string) ([]byte, error) {
 		return []byte("injected"), nil
 	}, func(path string, argv, env []string) error {
 		if path == "" || !reflect.DeepEqual(argv, []string{"sh", "-c", "exit 42"}) {
 			t.Fatalf("path=%q argv=%q", path, argv)
 		}
-		found := false
+		found := 0
 		for _, entry := range env {
-			if entry == "KEYINJECT_TEST_VALUE=injected" {
-				found = true
-			}
-			if entry == "PATH="+oldPath {
-				continue
+			if strings.HasPrefix(entry, "KEYINJECT_TEST_VALUE=") {
+				found++
+				if entry != "KEYINJECT_TEST_VALUE=injected" {
+					t.Fatalf("unexpected injected entry %q", entry)
+				}
 			}
 		}
-		if !found {
-			t.Fatalf("injected value missing from env %q", env)
+		if found != 1 {
+			t.Fatalf("found %d entries for injected value", found)
 		}
 		return errors.New("exec failed")
 	}, &stdout, &stderr)

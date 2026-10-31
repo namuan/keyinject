@@ -13,10 +13,20 @@ static CFStringRef makeString(const char *value) {
 
 static OSStatus readPassword(const char *service, const char *account, const UInt8 **bytes, CFIndex *length) {
 	CFStringRef serviceValue = makeString(service);
+	if (serviceValue == NULL) return errSecAllocate;
 	CFStringRef accountValue = makeString(account);
+	if (accountValue == NULL) {
+		CFRelease(serviceValue);
+		return errSecAllocate;
+	}
 	const void *keys[] = { kSecClass, kSecAttrService, kSecAttrAccount, kSecReturnData, kSecMatchLimit };
 	const void *values[] = { kSecClassGenericPassword, serviceValue, accountValue, kCFBooleanTrue, kSecMatchLimitOne };
 	CFDictionaryRef query = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	if (query == NULL) {
+		CFRelease(serviceValue);
+		CFRelease(accountValue);
+		return errSecAllocate;
+	}
 	CFTypeRef result = NULL;
 	OSStatus status = SecItemCopyMatching(query, &result);
 	if (status == errSecSuccess) {
@@ -24,7 +34,7 @@ static OSStatus readPassword(const char *service, const char *account, const UIn
 		*length = CFDataGetLength(data);
 		UInt8 *copy = malloc(*length);
 		if (*length > 0 && copy == NULL) {
-			status = -1;
+			status = errSecAllocate;
 		} else {
 			if (*length > 0) memcpy(copy, CFDataGetBytePtr(data), *length);
 			*bytes = copy;
@@ -41,10 +51,14 @@ import "C"
 
 import (
 	"fmt"
+	"unicode/utf8"
 	"unsafe"
 )
 
 func lookupKeychain(service, account string) ([]byte, error) {
+	if !utf8.ValidString(service) || !utf8.ValidString(account) {
+		return nil, fmt.Errorf("service and account must be valid UTF-8")
+	}
 	serviceValue := C.CString(service)
 	defer C.free(unsafe.Pointer(serviceValue))
 	accountValue := C.CString(account)
