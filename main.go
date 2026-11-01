@@ -35,7 +35,14 @@ type options struct {
 	dryRun        bool
 	verbose       bool
 	showVersion   bool
+	config        string
+	noConfig      bool
 	command       []string
+}
+
+type secretRequest struct {
+	name    string
+	service string
 }
 
 type lookupFunc func(service, account string) ([]byte, error)
@@ -56,7 +63,35 @@ func run(args []string, lookup lookupFunc, execute execFunc, stdout, stderr io.W
 		fmt.Fprintln(stdout, version)
 		return 0
 	}
-	if len(opts.envs) == 0 {
+	requests := make([]secretRequest, 0, len(opts.envs))
+	seen := make(map[string]bool, len(opts.envs))
+	for _, name := range opts.envs {
+		requests = append(requests, secretRequest{name: name, service: opts.servicePrefix + name})
+		seen[name] = true
+	}
+	if !opts.noConfig {
+		configPath := opts.config
+		if configPath == "" {
+			configPath = ".keyinject"
+		}
+		configRequests, err := loadConfig(configPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "keyinject: read config %s: %v\n", configPath, err)
+			return 1
+		}
+		for _, req := range configRequests {
+			if seen[req.name] {
+				continue
+			}
+			service := req.service
+			if service == "" {
+				service = opts.servicePrefix + req.name
+			}
+			requests = append(requests, secretRequest{name: req.name, service: service})
+			seen[req.name] = true
+		}
+	}
+	if len(requests) == 0 {
 		fmt.Fprintln(stderr, "keyinject: at least one --env is required")
 		printUsage(stderr)
 		return 2
@@ -74,39 +109,39 @@ func run(args []string, lookup lookupFunc, execute execFunc, stdout, stderr io.W
 		}
 		opts.account = current.Username
 	}
-	values := make(map[string]string, len(opts.envs))
+	values := make(map[string]string, len(requests))
 	missing := make(map[string]bool)
-	for _, name := range opts.envs {
-		data, err := lookup(opts.servicePrefix+name, opts.account)
+	for _, req := range requests {
+		data, err := lookup(req.service, opts.account)
 		if err != nil {
 			if errors.Is(err, errKeyNotFound) {
-				missing[name] = true
+				missing[req.name] = true
 				if opts.dryRun || opts.allowMissing {
 					continue
 				}
-				fmt.Fprintf(stderr, "keyinject: secret for %s not found in Keychain\n", name)
+				fmt.Fprintf(stderr, "keyinject: secret for %s not found in Keychain\n", req.name)
 				return 1
 			}
-			fmt.Fprintf(stderr, "keyinject: read Keychain item for %s: %v\n", name, err)
+			fmt.Fprintf(stderr, "keyinject: read Keychain item for %s: %v\n", req.name, err)
 			return 1
 		}
-		values[name] = strings.TrimSuffix(string(data), "\n")
+		values[req.name] = strings.TrimSuffix(string(data), "\n")
 	}
 	if opts.dryRun {
-		for _, name := range opts.envs {
-			if missing[name] {
-				fmt.Fprintf(stdout, "MISSING: %s\n", name)
+		for _, req := range requests {
+			if missing[req.name] {
+				fmt.Fprintf(stdout, "MISSING: %s\n", req.name)
 			} else {
-				fmt.Fprintf(stdout, "resolved: %s\n", name)
+				fmt.Fprintf(stdout, "resolved: %s\n", req.name)
 			}
 		}
 		fmt.Fprintf(stdout, "argv: %q\n", opts.command)
 		return 0
 	}
 	if opts.verbose {
-		for _, name := range opts.envs {
-			if !missing[name] {
-				fmt.Fprintf(stderr, "keyinject: resolved %s\n", name)
+		for _, req := range requests {
+			if !missing[req.name] {
+				fmt.Fprintf(stderr, "keyinject: resolved %s\n", req.name)
 			}
 		}
 	}
@@ -145,6 +180,8 @@ func parseOptions(args []string) (options, error) {
 	set.BoolVar(&opts.dryRun, "dry-run", false, "print resolved names and target argv")
 	set.BoolVar(&opts.verbose, "verbose", false, "log resolved names and execution target")
 	set.BoolVar(&opts.showVersion, "version", false, "print version")
+	set.StringVar(&opts.config, "config", "", "config file with env names (default: .keyinject)")
+	set.BoolVar(&opts.noConfig, "no-config", false, "do not load .keyinject config file")
 	if err := set.Parse(args); err != nil {
 		return opts, err
 	}
@@ -156,6 +193,36 @@ func parseOptions(args []string) (options, error) {
 	}
 	opts.command = set.Args()
 	return opts, nil
+}
+
+func loadConfig(path string) ([]secretRequest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var requests []secretRequest
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, service, hasOverride := strings.Cut(line, "=")
+		name = strings.TrimSpace(name)
+		if !envNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("invalid environment variable name %q in %s", name, path)
+		}
+		if hasOverride {
+			service = strings.TrimSpace(service)
+			if service == "" {
+				return nil, fmt.Errorf("empty service override for %q in %s", name, path)
+			}
+		}
+		requests = append(requests, secretRequest{name: name, service: service})
+	}
+	return requests, nil
 }
 
 func mergeEnvironment(base []string, values map[string]string) []string {

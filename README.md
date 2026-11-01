@@ -102,9 +102,30 @@ Options:
 | `--service-prefix PREFIX` | Keychain service prefix. Default: `keyinject.` |
 | `--account NAME` | Keychain account. Default: current user. |
 | `--allow-missing` | Continue without secrets that are absent from Keychain. |
+| `--config FILE` | Read env names from FILE (default: `.keyinject` in the current directory). |
 | `--dry-run` | Resolve requested items and print names and target argv, never secret values; does not run the target. |
+| `--no-config` | Do not load the `.keyinject` config file. |
 | `--verbose` | Log resolved names and execution target to stderr, never values. |
 | `--version` | Print the build version. |
+
+## Config file (`.keyinject`)
+
+Instead of passing `--env` on every invocation, create a `.keyinject` file in your project directory listing one environment variable name per line:
+
+```
+# Comments are allowed
+OPENAI_API_KEY
+GITHUB_TOKEN
+SENTRY_DSN=custom.service.name
+```
+
+Each line is an env name to inject from Keychain. The service used is `<service-prefix><NAME>` (default `keyinject.<NAME>`). Optionally, append `=<service>` to use a custom Keychain service for that name.
+
+Blank lines and lines starting with `#` are ignored.
+
+When both `.keyinject` and `--env` are used, CLI `--env` names take precedence and duplicate names are resolved only once.
+
+Skip the config file with `--no-config`, or use a different path with `--config /path/to/file`.
 
 A dry run reports absent items as `MISSING` and exits successfully. Without `--dry-run` or `--allow-missing`, a missing item is an error. `--allow-missing` leaves an absent variable unchanged if it was already present in the invoking environment.
 
@@ -241,6 +262,12 @@ $ bin/keyinject --env OPENAI_API_KEY --env GITHUB_TOKEN --dry-run -- python3 app
 resolved: OPENAI_API_KEY
 resolved: GITHUB_TOKEN
 argv: ["python3" "app.py"]
+
+$ bin/keyinject --dry-run -- python3 app.py
+# uses .keyinject if present
+resolved: OPENAI_API_KEY
+resolved: GITHUB_TOKEN
+argv: ["python3" "app.py"]
 ```
 
 Missing keys show up as `MISSING` under `--dry-run`, or fail the run (exit `1`) without `--allow-missing`.
@@ -295,8 +322,9 @@ Reserving namespace so v1 doesn't paint itself into a corner:
 - `keyinject --dry-run --env FOO -- true` prints `resolved: FOO` and **not** the value.
 - `keyinject --env FOO -- sh -c 'exit 42'` exits `42`.
 - `keyinject --env FOO -- python3 -c 'import os, time; print(os.environ["FOO"]); time.sleep(5)'` — while it sleeps, `ps eww -p $PID` does **not** reveal the secret on the command line (it will appear in the process environment block, which is expected; the point is it isn't in argv).
-- `keyinject` invoked with no `--env` exits `2` with usage.
+- `keyinject` invoked with no `--env` and no `.keyinject` exits `2` with usage.
 - `keyinject` invoked with no command exits `2` with usage.
+- `keyinject --dry-run --config .keyinject -- true` resolves names from `.keyinject` and prints them.
 
 ## Security notes
 
