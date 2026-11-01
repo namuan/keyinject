@@ -53,8 +53,18 @@ func main() {
 }
 
 func run(args []string, lookup lookupFunc, execute execFunc, stdout, stderr io.Writer) int {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			printHelp(stdout)
+			return 0
+		}
+	}
 	opts, err := parseOptions(args)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printHelp(stdout)
+			return 0
+		}
 		fmt.Fprintf(stderr, "keyinject: %v\n", err)
 		printUsage(stderr)
 		return 2
@@ -168,11 +178,55 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: keyinject [flags] -- <command> [args...]")
 }
 
+func printHelp(w io.Writer) {
+	fmt.Fprintln(w, "keyinject — inject macOS Keychain secrets into a command's environment")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  keyinject [flags] -- <command> [args...]")
+	fmt.Fprintln(w, "  keyinject [flags] <command> [args...]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The -- separator is optional but recommended so the target command's own")
+	fmt.Fprintln(w, "flags are not parsed by keyinject.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Flags:")
+	fmt.Fprintln(w, "  --env NAME                Required; repeatable. Environment variable name to load from Keychain.")
+	fmt.Fprintln(w, "  --service-prefix PREFIX   Keychain service prefix. Default: keyinject.")
+	fmt.Fprintln(w, "  --account NAME            Keychain account. Default: current user.")
+	fmt.Fprintln(w, "  --allow-missing           Continue without secrets that are absent from Keychain.")
+	fmt.Fprintln(w, "  --config FILE             Read env names from FILE (default: .keyinject in the current directory).")
+	fmt.Fprintln(w, "  --dry-run                 Print resolved names and target argv, never secret values; does not run the target.")
+	fmt.Fprintln(w, "  --no-config               Do not load the .keyinject config file.")
+	fmt.Fprintln(w, "  --verbose                 Log resolved names and execution target to stderr; never logs values.")
+	fmt.Fprintln(w, "  --version                 Print the build version.")
+	fmt.Fprintln(w, "  -h, --help                Show this help message.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Config file (.keyinject):")
+	fmt.Fprintln(w, "  Instead of passing --env on every invocation, create a .keyinject file listing one")
+	fmt.Fprintln(w, "  environment variable name per line. Blank lines and # comments are ignored.")
+	fmt.Fprintln(w, "  Optionally append =<service> to use a custom Keychain service for a name.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintln(w, "  keyinject --env OPENAI_API_KEY -- python3 app.py")
+	fmt.Fprintln(w, "  keyinject --env FOO --env BAR -- sh -c 'echo $FOO:$BAR'")
+	fmt.Fprintln(w, "  keyinject --dry-run --env FOO -- true")
+	fmt.Fprintln(w, "  keyinject --config .keyinject -- python3 app.py")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Exit codes:")
+	fmt.Fprintln(w, "  0   success (or --dry-run / --version)")
+	fmt.Fprintln(w, "  1   resolution error (missing key, Keychain read error, exec failure)")
+	fmt.Fprintln(w, "  2   usage error (no --env, no command, invalid flag)")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Secrets are provisioned in Keychain with:")
+	fmt.Fprintln(w, "  security add-generic-password -s keyinject.NAME -a $USER -w")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "See https://github.com/namuan/keyinject for more.")
+}
+
 func parseOptions(args []string) (options, error) {
 	var opts options
 	var envs stringList
 	set := flag.NewFlagSet("keyinject", flag.ContinueOnError)
-	set.SetOutput(io.Discard)
+	set.SetOutput(os.Stderr)
 	set.Var(&envs, "env", "environment variable name to inject")
 	set.StringVar(&opts.servicePrefix, "service-prefix", "keyinject.", "Keychain service prefix")
 	set.StringVar(&opts.account, "account", "", "Keychain account")
